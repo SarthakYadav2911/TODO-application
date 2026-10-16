@@ -1,544 +1,591 @@
-import { useEffect, useState } from "react"
-import "./App.css"
 
-function App() {
+import { useEffect, useState } from "react";
+import "./App.css";
 
-    // =========================
-    // STATE
-    // =========================
+const API = "http://localhost:8080";
 
-    const [todoText, setTodoText] = useState("")
-    const [todos, setTodos] = useState([])
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [authMode, setAuthMode] = useState("login");
+  const [authForm, setAuthForm] = useState({
+    name: "",
+    email: "",
+    password: "",
+  });
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [authError, setAuthError] = useState("");
+  const [notice, setNotice] = useState("");
 
-    const [searchText, setSearchText] = useState("")
+  const [todos, setTodos] = useState([]);
+  const [todoText, setTodoText] = useState("");
+  const [searchText, setSearchText] = useState("");
+  const [darkMode, setDarkMode] = useState(false);
+  const [activePage, setActivePage] = useState("Dashboard");
+  const [taskLoading, setTaskLoading] = useState(false);
 
-    const [darkMode, setDarkMode] = useState(false)
+  // All API requests use the browser's session cookie.
+  async function apiRequest(path, options = {}) {
+    const response = await fetch(`${API}${path}`, {
+      ...options,
+      credentials: "include",
+      headers: {
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
+        ...options.headers,
+      },
+    });
 
-    const [activePage, setActivePage] = useState("Dashboard")
+    if (!response.ok) {
+      let message = `Request failed (${response.status})`;
 
+      try {
+        const data = await response.json();
+        message = data.message || data.error || message;
+      } catch {
+        // The server may return an empty response.
+      }
 
-    // =========================
-    // GET TODOS
-    // =========================
-
-    useEffect(() => {
-
-        fetch("http://localhost:8080/todo")
-
-            .then(response => {
-
-                if (!response.ok) {
-                    throw new Error("Failed to fetch TODOs")
-                }
-
-                return response.json()
-            })
-
-            .then(data => {
-                setTodos(data)
-            })
-
-            .catch(error => {
-                console.error("Error fetching TODOs:", error)
-            })
-
-    }, [])
-
-
-    // =========================
-    // ADD TODO
-    // =========================
-
-    async function handleAddTodo() {
-
-        if (todoText.trim() === "") {
-            alert("Please enter a TODO")
-            return
-        }
-
-        try {
-
-            const response = await fetch(
-                "http://localhost:8080/todo",
-                {
-                    method: "POST",
-
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
-
-                    body: JSON.stringify({
-                        title: todoText,
-                        completed: false
-                    })
-                }
-            )
-
-
-            if (!response.ok) {
-                throw new Error("Failed to add TODO")
-            }
-
-
-            const newTodo = await response.json()
-
-
-            setTodos(previousTodos => [
-                ...previousTodos,
-                newTodo
-            ])
-
-
-            setTodoText("")
-
-        }
-
-        catch (error) {
-
-            console.error("Error adding TODO:", error)
-
-            alert("Could not add TODO. Check the console.")
-
-        }
+      throw new Error(message);
     }
 
+    if (response.status === 204) return null;
 
-    // =========================
-    // TOGGLE TODO COMPLETION
-    // =========================
+    const contentType = response.headers.get("content-type");
+    return contentType?.includes("application/json")
+      ? response.json()
+      : null;
+  }
 
-    async function handleToggleTodo(todo) {
+  // Check whether an existing session is still valid.
+  async function loadTodos() {
+    const data = await apiRequest("/api/todos");
+    setTodos(Array.isArray(data) ? data : []);
+    return true;
+  }
 
-        try {
+  useEffect(() => {
+    let cancelled = false;
 
-            const response = await fetch(
-                `http://localhost:8080/todo/${todo.id}`,
-                {
-                    method: "PUT",
+    async function checkSession() {
+      try {
+        const data = await apiRequest("/api/todos");
 
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
-
-                    body: JSON.stringify({
-                        title: todo.title,
-                        completed: !todo.completed
-                    })
-                }
-            )
-
-
-            if (!response.ok) {
-                throw new Error("Failed to update TODO")
-            }
-
-
-            const updatedTodo = await response.json()
-
-
-            setTodos(previousTodos =>
-                previousTodos.map(currentTodo =>
-                    currentTodo.id === updatedTodo.id
-                        ? updatedTodo
-                        : currentTodo
-                )
-            )
-
+        if (!cancelled) {
+          setTodos(Array.isArray(data) ? data : []);
+          setUser({ name: "TaskFlow User", email: "" });
         }
-
-        catch (error) {
-
-            console.error("Error updating TODO:", error)
-
-            alert("Could not update TODO")
-
+      } catch {
+        if (!cancelled) {
+          setUser(null);
+          setTodos([]);
         }
+      } finally {
+        if (!cancelled) setAuthChecked(true);
+      }
     }
 
+    checkSession();
 
-    // =========================
-    // SEARCH TODOS
-    // =========================
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-    const filteredTodos = todos.filter(todo =>
-        todo.title
-            .toLowerCase()
-            .includes(searchText.toLowerCase())
-    )
+  // Register or log in.
+  async function handleAuth(event) {
+    event.preventDefault();
+    setAuthError("");
+    setNotice("");
+    setAuthLoading(true);
 
+    try {
+      if (authMode === "register") {
+        await apiRequest("/api/users/register", {
+          method: "POST",
+          body: JSON.stringify(authForm),
+        });
 
-    // =========================
-    // STATISTICS
-    // =========================
+        setAuthMode("login");
+        setAuthForm((previous) => ({
+          ...previous,
+          password: "",
+        }));
+        setNotice("Account created! Please log in.");
+        return;
+      }
 
-    const totalTasks = todos.length
+      const loggedInUser = await apiRequest("/api/users/login", {
+        method: "POST",
+        body: JSON.stringify({
+          email: authForm.email,
+          password: authForm.password,
+        }),
+      });
 
-    const completedTasks = todos.filter(
-        todo => todo.completed
-    ).length
+      setUser(loggedInUser);
+      await loadTodos();
+      setAuthForm({ name: "", email: "", password: "" });
+      setNotice("");
+    } catch (error) {
+      setAuthError(error.message || "Authentication failed.");
+      setUser(null);
+    } finally {
+      setAuthLoading(false);
+    }
+  }
 
-    const pendingTasks = totalTasks - completedTasks
+  // Log out and invalidate the server session.
+  async function handleLogout() {
+    try {
+      await apiRequest("/api/users/logout", { method: "POST" });
+    } catch (error) {
+      console.error("Logout error:", error);
+    } finally {
+      setUser(null);
+      setTodos([]);
+      setNotice("You have logged out.");
+      setAuthMode("login");
+    }
+  }
 
+  // Add a task.
+  async function handleAddTodo(event) {
+    event?.preventDefault();
 
-    // =========================
-    // ADD TODO WITH ENTER
-    // =========================
+    const title = todoText.trim();
+    if (!title || taskLoading) return;
 
-    function handleKeyDown(event) {
+    setTaskLoading(true);
 
-        if (event.key === "Enter") {
-            handleAddTodo()
-        }
+    try {
+      const newTodo = await apiRequest("/api/todos", {
+        method: "POST",
+        body: JSON.stringify({ title, completed: false }),
+      });
+
+      setTodos((previous) => [...previous, newTodo]);
+      setTodoText("");
+      setNotice("");
+    } catch (error) {
+      setNotice(`Could not add task: ${error.message}`);
+    } finally {
+      setTaskLoading(false);
+    }
+  }
+
+  // Toggle task completion.
+  async function handleToggleTodo(todo) {
+    try {
+      const updatedTodo = await apiRequest(`/api/todos/${todo.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          title: todo.title,
+          completed: !todo.completed,
+        }),
+      });
+
+      setTodos((previous) =>
+        previous.map((item) =>
+          item.id === updatedTodo.id ? updatedTodo : item
+        )
+      );
+    } catch (error) {
+      setNotice(`Could not update task: ${error.message}`);
+    }
+  }
+
+  // Delete a task.
+  async function handleDeleteTodo(todo) {
+    try {
+      await apiRequest(`/api/todos/${todo.id}`, {
+        method: "DELETE",
+      });
+
+      setTodos((previous) =>
+        previous.filter((item) => item.id !== todo.id)
+      );
+    } catch (error) {
+      setNotice(`Could not delete task: ${error.message}`);
+    }
+  }
+
+  const totalTasks = todos.length;
+  const completedTasks = todos.filter((todo) => todo.completed).length;
+  const pendingTasks = totalTasks - completedTasks;
+
+  const filteredTodos = todos.filter((todo) => {
+    const matchesSearch = todo.title
+      .toLowerCase()
+      .includes(searchText.toLowerCase());
+
+    if (activePage === "Completed") {
+      return matchesSearch && todo.completed;
     }
 
+    if (activePage === "My Tasks") {
+      return matchesSearch && !todo.completed;
+    }
 
-    // =========================
-    // RETURN
-    // =========================
+    return matchesSearch;
+  });
 
+  if (!authChecked) {
     return (
+      <div style={styles.screen}>
+        <p>Connecting to TaskFlow...</p>
+      </div>
+    );
+  }
 
-        <div className={darkMode ? "app dark" : "app"}>
+  // Login and registration screen.
+  if (!user) {
+    return (
+      <div style={styles.screen}>
+        <form onSubmit={handleAuth} style={styles.authCard}>
+          <h1 style={styles.authTitle}>✓ TaskFlow</h1>
+          <p style={styles.muted}>
+            {authMode === "login"
+              ? "Welcome back! Log in to continue."
+              : "Create your account to get started."}
+          </p>
 
+          {authMode === "register" && (
+            <label style={styles.label}>
+              Full name
+              <input
+                style={styles.input}
+                type="text"
+                autoComplete="name"
+                required
+                value={authForm.name}
+                onChange={(event) =>
+                  setAuthForm({ ...authForm, name: event.target.value })
+                }
+                placeholder="Your name"
+              />
+            </label>
+          )}
 
-            {/* =========================
-                SIDEBAR
-            ========================= */}
+          <label style={styles.label}>
+            Email
+            <input
+              style={styles.input}
+              type="email"
+              autoComplete="email"
+              required
+              value={authForm.email}
+              onChange={(event) =>
+                setAuthForm({ ...authForm, email: event.target.value })
+              }
+              placeholder="you@example.com"
+            />
+          </label>
 
-            <aside className="sidebar">
+          <label style={styles.label}>
+            Password
+            <input
+              style={styles.input}
+              type="password"
+              autoComplete={
+                authMode === "login" ? "current-password" : "new-password"
+              }
+              minLength={8}
+              required
+              value={authForm.password}
+              onChange={(event) =>
+                setAuthForm({ ...authForm, password: event.target.value })
+              }
+              placeholder="At least 8 characters"
+            />
+          </label>
 
-                <div className="logo">
-                    ✓ TaskFlow
+          {authError && <p style={styles.error}>{authError}</p>}
+          {notice && <p style={styles.success}>{notice}</p>}
+
+          <button
+            style={styles.primaryButton}
+            type="submit"
+            disabled={authLoading}
+          >
+            {authLoading
+              ? "Please wait..."
+              : authMode === "login"
+                ? "Log in"
+                : "Create account"}
+          </button>
+
+          <p style={styles.switchText}>
+            {authMode === "login"
+              ? "Don't have an account?"
+              : "Already have an account?"}{" "}
+            <button
+              type="button"
+              style={styles.linkButton}
+              onClick={() => {
+                setAuthMode(authMode === "login" ? "register" : "login");
+                setAuthError("");
+                setNotice("");
+              }}
+            >
+              {authMode === "login" ? "Register" : "Log in"}
+            </button>
+          </p>
+        </form>
+      </div>
+    );
+  }
+
+  // Main dashboard.
+  return (
+    <div className={darkMode ? "app dark" : "app"}>
+      <aside className="sidebar">
+        <div className="logo">✓ TaskFlow</div>
+
+        <nav>
+          {["Dashboard", "My Tasks", "Completed", "Settings"].map((page) => (
+            <button
+              key={page}
+              className={`nav-item ${activePage === page ? "active" : ""}`}
+              onClick={() => setActivePage(page)}
+            >
+              {page}
+            </button>
+          ))}
+
+          <button className="nav-item" onClick={handleLogout}>
+            Log out
+          </button>
+        </nav>
+      </aside>
+
+      <main className="main-content">
+        <header className="topbar">
+          <div className="search">
+            <span>🔍</span>
+            <input
+              type="text"
+              placeholder="Search tasks..."
+              value={searchText}
+              onChange={(event) => setSearchText(event.target.value)}
+            />
+          </div>
+
+          <div className="topbar-right">
+            <button
+              className="theme-toggle"
+              onClick={() => setDarkMode(!darkMode)}
+              title="Toggle theme"
+            >
+              {darkMode ? "☀️" : "🌙"}
+            </button>
+
+            <div className="profile">
+              <div className="avatar">
+                {(user.name || user.email || "U")[0].toUpperCase()}
+              </div>
+              <span>{user.name || user.email}</span>
+            </div>
+          </div>
+        </header>
+
+        <section className="dashboard">
+          <div className="welcome">
+            <h1>Hello, {user.name || "there"} 👋</h1>
+            <p>Here's what's on your plate today.</p>
+          </div>
+
+          {notice && (
+            <p role="status" style={{ marginBottom: 16 }}>
+              {notice}
+              <button
+                type="button"
+                onClick={() => setNotice("")}
+                style={styles.dismissButton}
+                aria-label="Dismiss message"
+              >
+                ×
+              </button>
+            </p>
+          )}
+
+          {activePage !== "Settings" ? (
+            <>
+              <div className="stats">
+                <div className="stat-card">
+                  <span>Total Tasks</span>
+                  <strong>{totalTasks}</strong>
                 </div>
+                <div className="stat-card">
+                  <span>Pending</span>
+                  <strong>{pendingTasks}</strong>
+                </div>
+                <div className="stat-card">
+                  <span>Completed</span>
+                  <strong>{completedTasks}</strong>
+                </div>
+              </div>
 
+              <div className="task-header">
+                <h2>{activePage === "Completed" ? "Completed Tasks" : "My Tasks"}</h2>
+                <p>Manage your daily tasks</p>
+              </div>
 
-                <nav>
+              {activePage !== "Completed" && (
+                <form className="add-task" onSubmit={handleAddTodo}>
+                  <input
+                    type="text"
+                    placeholder="What needs to be done?"
+                    value={todoText}
+                    onChange={(event) => setTodoText(event.target.value)}
+                    maxLength={200}
+                  />
+                  <button type="submit" disabled={taskLoading || !todoText.trim()}>
+                    {taskLoading ? "Adding..." : "Add Task"}
+                  </button>
+                </form>
+              )}
 
-                    <button
-                        className={
-                            activePage === "Dashboard"
-                                ? "nav-item active"
-                                : "nav-item"
-                        }
-
-                        onClick={() => setActivePage("Dashboard")}
+              <div className="task-list">
+                {filteredTodos.length === 0 ? (
+                  <p className="no-tasks">No tasks to show. Add one to get started!</p>
+                ) : (
+                  filteredTodos.map((todo) => (
+                    <div
+                      className={`task-card ${todo.completed ? "completed" : ""}`}
+                      key={todo.id}
                     >
-                        Dashboard
-                    </button>
-
-
-                    <button
-                        className={
-                            activePage === "My Tasks"
-                                ? "nav-item active"
-                                : "nav-item"
-                        }
-
-                        onClick={() => setActivePage("My Tasks")}
-                    >
-                        My Tasks
-                    </button>
-
-
-                    <button
-                        className={
-                            activePage === "Completed"
-                                ? "nav-item active"
-                                : "nav-item"
-                        }
-
-                        onClick={() => setActivePage("Completed")}
-                    >
-                        Completed
-                    </button>
-
-
-                    <button
-                        className={
-                            activePage === "Settings"
-                                ? "nav-item active"
-                                : "nav-item"
-                        }
-
-                        onClick={() => setActivePage("Settings")}
-                    >
-                        Settings
-                    </button>
-
-                </nav>
-
-            </aside>
-
-
-            {/* =========================
-                MAIN CONTENT
-            ========================= */}
-
-            <main className="main-content">
-
-
-                {/* =========================
-                    TOP BAR
-                ========================= */}
-
-                <header className="topbar">
-
-
-                    {/* SEARCH */}
-
-                    <div className="search">
-
-                        <span>🔍</span>
-
+                      <div className="task-left">
                         <input
-                            type="text"
-                            placeholder="Search tasks..."
-                            value={searchText}
-                            onChange={(event) =>
-                                setSearchText(event.target.value)
-                            }
+                          type="checkbox"
+                          checked={todo.completed}
+                          onChange={() => handleToggleTodo(todo)}
+                          aria-label={`Mark ${todo.title} ${
+                            todo.completed ? "pending" : "completed"
+                          }`}
                         />
+                        <span>{todo.title}</span>
+                      </div>
 
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteTodo(todo)}
+                        aria-label={`Delete ${todo.title}`}
+                        title="Delete task"
+                        style={styles.deleteButton}
+                      >
+                        🗑️
+                      </button>
                     </div>
-
-
-                    {/* RIGHT SIDE */}
-
-                    <div className="topbar-right">
-
-
-                        {/* THEME BUTTON */}
-
-                        <button
-                            className="theme-toggle"
-
-                            onClick={() =>
-                                setDarkMode(!darkMode)
-                            }
-
-                            title={
-                                darkMode
-                                    ? "Switch to light mode"
-                                    : "Switch to dark mode"
-                            }
-                        >
-
-                            {darkMode ? "☀️" : "🌙"}
-
-                        </button>
-
-
-                        {/* PROFILE */}
-
-                        <div className="profile">
-
-                            <div className="avatar">
-                                S
-                            </div>
-
-                            <span>
-                                Sarthak
-                            </span>
-
-                        </div>
-
-                    </div>
-
-                </header>
-
-
-                {/* =========================
-                    DASHBOARD
-                ========================= */}
-
-                <section className="dashboard">
-
-
-                    {/* WELCOME */}
-
-                    <div className="welcome">
-
-                        <h1>
-                            Good morning, Sarthak 👋
-                        </h1>
-
-                        <p>
-                            Here's what's on your plate today.
-                        </p>
-
-                    </div>
-
-
-                    {/* =========================
-                        STATISTICS
-                    ========================= */}
-
-                    <div className="stats">
-
-
-                        <div className="stat-card">
-
-                            <span>
-                                Total Tasks
-                            </span>
-
-                            <strong>
-                                {totalTasks}
-                            </strong>
-
-                        </div>
-
-
-                        <div className="stat-card">
-
-                            <span>
-                                Pending
-                            </span>
-
-                            <strong>
-                                {pendingTasks}
-                            </strong>
-
-                        </div>
-
-
-                        <div className="stat-card">
-
-                            <span>
-                                Completed
-                            </span>
-
-                            <strong>
-                                {completedTasks}
-                            </strong>
-
-                        </div>
-
-                    </div>
-
-
-                    {/* =========================
-                        TASK SECTION
-                    ========================= */}
-
-                    <div className="task-header">
-
-                        <h2>
-                            My Tasks
-                        </h2>
-
-                        <p>
-                            Manage your daily tasks
-                        </p>
-
-                    </div>
-
-
-                    {/* =========================
-                        ADD TASK
-                    ========================= */}
-
-                    <div className="add-task">
-
-
-                        <input
-                            type="text"
-
-                            placeholder="What needs to be done?"
-
-                            value={todoText}
-
-                            onChange={(event) =>
-                                setTodoText(event.target.value)
-                            }
-
-                            onKeyDown={handleKeyDown}
-                        />
-
-
-                        <button
-                            onClick={handleAddTodo}
-                        >
-                            + Add Task
-                        </button>
-
-                    </div>
-
-
-                    {/* =========================
-                        TASK LIST
-                    ========================= */}
-
-                    <div className="task-list">
-
-
-                        {filteredTodos.length === 0 ? (
-
-                            <div className="no-tasks">
-
-                                {searchText
-                                    ? "No tasks found."
-                                    : "No tasks yet. Add your first task!"
-                                }
-
-                            </div>
-
-                        ) : (
-
-                            filteredTodos.map(todo => (
-
-                                <div
-                                    className="task-card"
-                                    key={todo.id}
-                                >
-
-                                    <div className="task-left">
-
-
-                                        {/* CHECKBOX */}
-
-                                        <input
-                                            type="checkbox"
-
-                                            checked={
-                                                todo.completed
-                                            }
-
-                                            onChange={() =>
-                                                handleToggleTodo(todo)
-                                            }
-                                        />
-
-
-                                        {/* TODO TITLE */}
-
-                                        <span
-                                            className={
-                                                todo.completed
-                                                    ? "completed"
-                                                    : ""
-                                            }
-                                        >
-                                            {todo.title}
-                                        </span>
-
-
-                                    </div>
-
-                                </div>
-
-                            ))
-
-                        )}
-
-                    </div>
-
-                </section>
-
-            </main>
-
-        </div>
-    )
+                  ))
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="task-header">
+              <h2>Settings</h2>
+              <p>Signed in as {user.email || user.name}</p>
+              <button onClick={handleLogout} style={styles.primaryButton}>
+                Log out
+              </button>
+            </div>
+          )}
+        </section>
+      </main>
+    </div>
+  );
 }
 
-export default App
+const styles = {
+  screen: {
+    minHeight: "100vh",
+    display: "flex",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+    boxSizing: "border-box",
+    background: "linear-gradient(135deg, #eef2ff, #f8fafc)",
+    fontFamily: "Arial, sans-serif",
+  },
+  authCard: {
+    width: "100%",
+    maxWidth: 400,
+    boxSizing: "border-box",
+    padding: 32,
+    borderRadius: 16,
+    background: "#fff",
+    boxShadow: "0 12px 40px rgba(15, 23, 42, 0.10)",
+  },
+  authTitle: {
+    textAlign: "center",
+    margin: "0 0 8px",
+    color: "#4f46e5",
+  },
+  muted: {
+    textAlign: "center",
+    color: "#64748b",
+    marginBottom: 24,
+  },
+  label: {
+    display: "block",
+    marginBottom: 16,
+    color: "#334155",
+    fontSize: 14,
+    fontWeight: 600,
+  },
+  input: {
+    display: "block",
+    boxSizing: "border-box",
+    width: "100%",
+    marginTop: 8,
+    padding: 12,
+    border: "1px solid #cbd5e1",
+    borderRadius: 8,
+    fontSize: 15,
+  },
+  primaryButton: {
+    width: "100%",
+    padding: 12,
+    border: 0,
+    borderRadius: 8,
+    background: "#4f46e5",
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: 600,
+    cursor: "pointer",
+  },
+  error: {
+    color: "#b91c1c",
+    fontSize: 14,
+  },
+  success: {
+    color: "#15803d",
+    fontSize: 14,
+  },
+  switchText: {
+    marginTop: 20,
+    textAlign: "center",
+    color: "#64748b",
+    fontSize: 14,
+  },
+  linkButton: {
+    border: 0,
+    padding: 0,
+    background: "none",
+    color: "#4f46e5",
+    cursor: "pointer",
+    fontWeight: 600,
+  },
+  deleteButton: {
+    border: 0,
+    background: "transparent",
+    cursor: "pointer",
+    padding: 8,
+  },
+  dismissButton: {
+    marginLeft: 10,
+    border: 0,
+    background: "transparent",
+    cursor: "pointer",
+    fontSize: 18,
+  },
+};

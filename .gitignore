@@ -17,3 +17,24 @@ backend/build/
 
 # OS files
 .DS_Store
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Session cookies and local test files
+cookies.txt
+
+# Frontend dependencies and build output
+frontend/node_modules/
+frontend/dist/
+
+# Backend build output
+backend/build/
+
+# IDE files
+.idea/
+.vscode/
+
+# Local backup
+frontend/src/app.backup.jsx
