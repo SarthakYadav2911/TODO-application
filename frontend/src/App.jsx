@@ -3,6 +3,43 @@ import { useEffect, useState } from "react";
 import "./App.css";
 
 const API = "http://localhost:8080";
+function getPlayerKey(user) {
+  return `taskflow-game-${user?.email || "guest"}`;
+}
+
+function getToday() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getYesterday() {
+  const date = new Date();
+  date.setDate(date.getDate() - 1);
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function formatTimestamp(value) {
+  if (!value) return "Not recorded";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Not recorded";
+  return date.toLocaleString();
+}
+
+function getLevel(xp) {
+  return Math.floor(xp / 100) + 1;
+}
+
+function getLevelProgress(xp) {
+  return xp % 100;
+}
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -23,6 +60,60 @@ export default function App() {
   const [darkMode, setDarkMode] = useState(false);
   const [activePage, setActivePage] = useState("Dashboard");
   const [taskLoading, setTaskLoading] = useState(false);
+  const [gameProfile, setGameProfile] = useState({
+    xp: 0,
+    streak: 0,
+    lastCompletedDate: "",
+    rewardedTaskIds: [],
+  });
+  const [loadedGameKey, setLoadedGameKey] = useState("");
+
+  // Load the game profile whenever the signed-in account changes.
+  useEffect(() => {
+    if (!user) {
+      setLoadedGameKey("");
+      return;
+    }
+
+    const key = getPlayerKey(user);
+    const emptyProfile = {
+      xp: 0,
+      streak: 0,
+      lastCompletedDate: "",
+      rewardedTaskIds: [],
+    };
+
+    try {
+      const saved = localStorage.getItem(key);
+      const parsed = saved ? JSON.parse(saved) : {};
+      setGameProfile({
+        ...emptyProfile,
+        ...parsed,
+        rewardedTaskIds: Array.isArray(parsed.rewardedTaskIds)
+          ? parsed.rewardedTaskIds
+          : [],
+      });
+    } catch (error) {
+      console.error("Could not load game progress:", error);
+      setGameProfile(emptyProfile);
+    }
+
+    setLoadedGameKey(key);
+  }, [user?.email]);
+
+  // Do not save until the profile for this account has been loaded.
+  useEffect(() => {
+    if (!user || !authChecked) return;
+
+    const key = getPlayerKey(user);
+    if (loadedGameKey !== key) return;
+
+    try {
+      localStorage.setItem(key, JSON.stringify(gameProfile));
+    } catch (error) {
+      console.error("Could not save game progress:", error);
+    }
+  }, [gameProfile, user?.email, authChecked, loadedGameKey]);
 
   // All API requests use the browser's session cookie.
   async function apiRequest(path, options = {}) {
@@ -189,6 +280,27 @@ export default function App() {
           item.id === updatedTodo.id ? updatedTodo : item
         )
       );
+  if (
+    !todo.completed &&
+    !gameProfile.rewardedTaskIds.includes(todo.id)
+  ) {
+    const today = getToday();
+
+    setGameProfile((previous) => ({
+      ...previous,
+      xp: previous.xp + 25,
+      streak:
+        previous.lastCompletedDate === today
+          ? previous.streak
+          : previous.lastCompletedDate === getYesterday()
+            ? previous.streak + 1
+            : 1,
+      lastCompletedDate: today,
+      rewardedTaskIds: [...previous.rewardedTaskIds, todo.id],
+    }));
+
+    setNotice("Quest complete! +25 XP ✨");
+  }
     } catch (error) {
       setNotice(`Could not update task: ${error.message}`);
     }
@@ -342,7 +454,7 @@ export default function App() {
         <div className="logo">✓ TaskFlow</div>
 
         <nav>
-          {["Dashboard", "My Tasks", "Completed", "Settings"].map((page) => (
+          {["Dashboard", "My Tasks", "Completed", "History", "Settings"].map((page) => (
             <button
               key={page}
               className={`nav-item ${activePage === page ? "active" : ""}`}
@@ -394,6 +506,54 @@ export default function App() {
             <p>Here's what's on your plate today.</p>
           </div>
 
+          {activePage !== "Settings" && (
+            <div className="game-hud">
+              <div className="player-card">
+                <div className="player-avatar" aria-hidden="true">🧙</div>
+                <div className="player-info">
+                  <span className="player-label">YOUR ADVENTURE</span>
+                  <h2>Level {getLevel(gameProfile.xp)} Explorer</h2>
+                  <p>
+                    {(gameProfile.lastCompletedDate === getToday() ||
+                      gameProfile.lastCompletedDate === getYesterday())
+                      ? gameProfile.streak
+                      : 0} day streak 🔥
+                  </p>
+                </div>
+                <div className="xp-total">
+                  <strong>{gameProfile.xp}</strong>
+                  <span>TOTAL XP</span>
+                </div>
+              </div>
+
+              <div className="xp-panel">
+                <div className="xp-heading">
+                  <span>✨ Progress to Level {getLevel(gameProfile.xp) + 1}</span>
+                  <strong>{getLevelProgress(gameProfile.xp)} / 100 XP</strong>
+                </div>
+                <div
+                  className="xp-track"
+                  role="progressbar"
+                  aria-label="Progress to next level"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={getLevelProgress(gameProfile.xp)}
+                >
+                  <div
+                    className="xp-fill"
+                    style={{ width: `${getLevelProgress(gameProfile.xp)}%` }}
+                  />
+                </div>
+              </div>
+
+              <div className="achievement-row">
+                <div className="achievement-badge">🌱 <span>Quest starter</span></div>
+                <div className="achievement-badge">⚡ <span>XP hunter</span></div>
+                <div className="achievement-badge">🔥 <span>Streak keeper</span></div>
+              </div>
+            </div>
+          )}
+
           {notice && (
             <p role="status" style={{ marginBottom: 16 }}>
               {notice}
@@ -426,11 +586,23 @@ export default function App() {
               </div>
 
               <div className="task-header">
-                <h2>{activePage === "Completed" ? "Completed Tasks" : "My Tasks"}</h2>
-                <p>Manage your daily tasks</p>
+                <h2>
+                  {activePage === "History"
+                    ? "Task History"
+                    : activePage === "Completed"
+                      ? "Completed Tasks"
+                      : activePage === "Dashboard"
+                        ? "All Tasks"
+                        : "My Tasks"}
+                </h2>
+                <p>
+                  {activePage === "History"
+                    ? "Review task status and recorded timestamps."
+                    : "Manage your daily tasks"}
+                </p>
               </div>
 
-              {activePage !== "Completed" && (
+              {activePage !== "Completed" && activePage !== "History" && (
                 <form className="add-task" onSubmit={handleAddTodo}>
                   <input
                     type="text"
@@ -463,7 +635,17 @@ export default function App() {
                             todo.completed ? "pending" : "completed"
                           }`}
                         />
-                        <span>{todo.title}</span>
+                        <div>
+                          <span>{todo.title}</span>
+                          {activePage === "History" && (
+                            <div style={styles.timestampList}>
+                              <span>Created: {formatTimestamp(todo.createdAt)}</span>
+                              <span>Updated: {formatTimestamp(todo.updatedAt)}</span>
+                              <span>Completed: {formatTimestamp(todo.completedAt)}</span>
+                              <span>Status: {todo.completed ? "Completed" : "Pending"}</span>
+                            </div>
+                          )}
+                        </div>
                       </div>
 
                       <button
@@ -575,6 +757,15 @@ const styles = {
     cursor: "pointer",
     fontWeight: 600,
   },
+  timestampList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 4,
+    marginTop: 8,
+    color: "#64748b",
+    fontSize: 12,
+    lineHeight: 1.5,
+  },
   deleteButton: {
     border: 0,
     background: "transparent",
@@ -589,3 +780,5 @@ const styles = {
     fontSize: 18,
   },
 };
+
+
